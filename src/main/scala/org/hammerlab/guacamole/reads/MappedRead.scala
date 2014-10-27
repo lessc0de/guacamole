@@ -105,6 +105,50 @@ case class MappedRead(
       mdTagString,
       Bases.basesToString(sequence)
     )
+
+  /**
+   *
+   *  In Illumina paired end, we expect the following pair structure
+   *
+   *  r1 -------> <-------- r2
+   *  Where the read with earlier start position is oriented positively 5' -> 3' and its mate (which starts later)
+   *  *must* be oriented negatively.
+   *
+   *  Translocation
+   *  Reads mapped to different chromosomes
+   *  r1 -------> ..... (????)
+   *
+   *  Inversions:
+   *  Reads are mapped in the same directions
+   *  r1 -------> --------> r2 or r1 <------- <-------- r2
+   *
+   *  Tandem Duplications:
+   *  Reads are mapped in the incorrect directions since the order is ambiguous
+   *  r1 <------- --------> r2
+   */
+
+  lazy val inTranslocatedRegion: Boolean = {
+    (isMapped && matePropertiesOpt.exists(!_.isMateMapped)) ||
+      matePropertiesOpt.exists(_.mateReferenceContig.exists(_ != referenceContig))
+  }
+
+  lazy val inDuplicatedRegion: Boolean = {
+    matePropertiesOpt.exists(mateProperties => {
+      (mateProperties.mateReferenceContig, mateProperties.mateStart) match {
+        case (Some(mateReferenceContig), Some(mateStart)) => {
+          referenceContig == mateReferenceContig &&
+            ((start < mateStart && !isPositiveStrand) || (start > mateStart && isPositiveStrand))
+        }
+        case _ => false
+      }
+    })
+  }
+
+  lazy val inInvertedRegion: Boolean = {
+    matePropertiesOpt.exists(mateProperties => mateProperties.isMateMapped
+      && isPositiveStrand == mateProperties.isMatePositiveStrand)
+  }
+
 }
 
 case class MissingMDTagException(record: SAMRecord)
