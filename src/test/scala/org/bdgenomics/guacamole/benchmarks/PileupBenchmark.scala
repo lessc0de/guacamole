@@ -1,29 +1,33 @@
 package org.bdgenomics.guacamole.benchmarks
 
-import org.bdgenomics.guacamole.pileup.Pileup
-import org.bdgenomics.guacamole.{LociSet, DistributedUtil, TestUtil}
+import org.bdgenomics.guacamole.TestUtil
 import org.bdgenomics.guacamole.TestUtil.HasSparkContext
+import org.bdgenomics.guacamole.pileup.Pileup
 import org.scalameter.api._
 
 object PileupBenchmark extends PerformanceTest.Quickbenchmark with HasSparkContext {
 
-  val loci = Gen.range("loci")(100, 1000, 100)
-  val arrays: Gen[String] = for (l <- loci) yield ("20:1-" + l.toString)
+  val loci: Gen[Int] = Gen.range("loci")(5, 50, 10)
+
+  val ranges = for {
+    size <- loci
+  } yield 1 until size
+
 
   createSpark("PileupBenchmark", true)
 
-  val tumorReads = TestUtil.loadReads(sc, "tumor.chr20.tough.sam")
+  def loadPileup(filename: String, locus: Long = 0): Pileup = {
+    val records = TestUtil.loadReads(sc, filename).mappedReads
+    val localReads = records.collect
+    Pileup(localReads, locus)
+  }
 
-  performance of "DistributedUtil" in {
-    measure method "pileupFlatMap" in {
-      using(arrays) in {
-        loci => {
-          DistributedUtil.pileupFlatMap[Pileup](
-            tumorReads.mappedReads,
-            DistributedUtil.partitionLociUniformly(4, LociSet.parse(loci)),
-            false, // don't skip empty pileups
-            pileup => Seq(pileup).iterator).collect()
-        }
+  val pileup = loadPileup("same_start_reads.sam", 0)
+
+  performance of "Pileup" in {
+    measure method "advanceToLocus" in {
+      using(ranges) in {
+        loci =>  loci.foreach(pileup.atGreaterLocus(_, Seq.empty.iterator))
       }
     }
   }
