@@ -582,12 +582,11 @@ object DistributedUtil extends Logging {
         val rdd2Records = sc.accumulator(0L, s"rdd2.records")
         val lociAccum = sc.accumulator(0L, s"rdd.task.loci")
         // Cogroup-based implementation.
-        val paritioned = taskNumberRegionPairs1.cogroup(taskNumberRegionPairs2, new PartitionByKey(numTasks.toInt))
+        val paritioned = taskNumberRegionPairs1.cogroup(taskNumberRegionPairs2)
         val sorted = new ShuffledRDD[TaskPosition, (Iterable[M], Iterable[M]), (Iterable[M], Iterable[M])](
           paritioned,
           new PartitionByKey(numTasks.toInt))
           .setKeyOrdering(implicitly[Ordering[TaskPosition]])
-
         sorted.mapPartitionsWithIndex((taskNum: Int, taskNumAndRegionPairs) => {
           if (taskNumAndRegionPairs.isEmpty) {
             Iterator.empty
