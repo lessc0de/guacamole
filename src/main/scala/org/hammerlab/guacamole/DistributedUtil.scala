@@ -453,12 +453,26 @@ object DistributedUtil extends Logging {
   class PartitionByKey(partitions: Int) extends Partitioner {
     def numPartitions = partitions
     def getPartition(key: Any): Int = key match {
-      case value: Long => value.toInt
-      case _           => throw new AssertionError("Unexpected key in PartitionByTask")
+      case value: Long         => value.toInt
+      case value: TaskPosition => value.task
+      case _                   => throw new AssertionError("Unexpected key in PartitionByTask")
     }
     override def equals(other: Any): Boolean = other match {
       case h: PartitionByKey => h.numPartitions == numPartitions
       case _                 => false
+    }
+  }
+
+  case class TaskPosition(task: Int, referenceContig: String, locus: Long) extends Ordered[TaskPosition] {
+
+    override def compare(y: TaskPosition): Int = {
+      if (task - y.task != 0) {
+        task - y.task
+      } else if (referenceContig.compare(y.referenceContig) != 0) {
+        referenceContig.compare(y.referenceContig)
+      } else {
+        (locus - y.locus).toInt
+      }
     }
   }
 
@@ -517,7 +531,7 @@ object DistributedUtil extends Logging {
     }
 
     // Expand regions into (task, region) pairs for each region RDD.
-    val taskNumberRegionPairsRDDs: PerSample[RDD[(Long, M)]] =
+    val taskNumberRegionPairsRDDs: PerSample[RDD[(TaskPosition, M)]] =
       regionRDDs.map(_.flatMap(region => {
         val singleContig = lociPartitionsBoxed.value.onContig(region.referenceContig)
         val thisRegionsTasks = singleContig.getAll(region.start - halfWindowSize, region.end + halfWindowSize)
@@ -528,7 +542,7 @@ object DistributedUtil extends Logging {
         expandedRegions += thisRegionsTasks.size
 
         // Return this region, duplicated for each task it is assigned to.
-        thisRegionsTasks.map((_, region))
+        thisRegionsTasks.map(task => (TaskPosition(task.toInt, region.referenceContig, region.start), region))
       }))
 
     // Run the task on each partition. Keep track of the number of regions assigned to each task in an accumulator, so
@@ -559,45 +573,51 @@ object DistributedUtil extends Logging {
       // One RDD.
       case taskNumberRegionPairs :: Nil => {
         // Each key (i.e. task) gets its own partition.
-        val partitioned = taskNumberRegionPairs.partitionBy(new PartitionByKey(numTasks.toInt))
-        partitioned.mapPartitionsWithIndex((taskNum: Int, taskNumAndRegions) => {
+        val partitioned = new ShuffledRDD(taskNumberRegionPairs, new PartitionByKey(numTasks.toInt)).setKeyOrdering(implicitly[Ordering[TaskPosition]])
+        partitioned.mapPartitionsWithIndex((taskNum: Int, taskNumAndRegions: Iterator[(TaskPosition, M)]) => {
           val taskLoci = lociPartitionsBoxed.value.asInverseMap(taskNum.toLong)
-          val taskRegions = taskNumAndRegions.map(pair => {
-            assert(pair._1 == taskNum)
-            pair._2
-          })
+          //          val taskRegions = taskNumAndRegions.map(pair => {
+          //            assert(pair._1 == taskNum)
+          //            pair._2
+          //          })
 
           // We need to invoke the function on an iterator of sorted regions. For now, we just load the regions into memory,
           // sort them by start position, and use an iterator of this. This of course means we load all the regions into memory,
           // which obviates the advantages of using iterators everywhere else. A better solution would be to somehow have
           // the data already sorted on each partition. Note that sorting the whole RDD of regions is unnecessary, so we're
           // avoiding it -- we just need that the regions on each task are sorted, no need to merge them across tasks.
-          val allRegions = taskRegions.toSeq.sortBy(region => (region.referenceContig, region.start))
+          //          val allRegions = taskRegions.toSeq.sortBy(region => (region.referenceContig, region.start))
 
-          regionsByTask.add(MutableHashMap(taskNum.toString -> allRegions.length))
-          function(taskNum, taskLoci, Seq(allRegions.iterator))
+          //          regionsByTask.add(MutableHashMap(taskNum.toString -> allRegions.length))
+          // val allRegions: Iterator[M] = taskNumAndRegions.map(_._2)
+          function(taskNum, taskLoci, Seq(taskNumAndRegions.map(_._2)))
         })
       }
 
       // Two RDDs.
       case taskNumberRegionPairs1 :: taskNumberRegionPairs2 :: Nil => {
         // Cogroup-based implementation.
-        val partitioned = taskNumberRegionPairs1.cogroup(taskNumberRegionPairs2, new PartitionByKey(numTasks.toInt))
-        partitioned.mapPartitionsWithIndex((taskNum: Int, taskNumAndRegionPairs) => {
-          if (taskNumAndRegionPairs.isEmpty) {
-            Iterator.empty
-          } else {
-            val taskLoci = lociPartitionsBoxed.value.asInverseMap(taskNum.toLong)
-            val taskNumAndPair = taskNumAndRegionPairs.next()
-            assert(taskNumAndRegionPairs.isEmpty)
-            assert(taskNumAndPair._1 == taskNum)
-            val taskRegions1 = taskNumAndPair._2._1.toSeq.sortBy(region => (region.referenceContig, region.start))
-            val taskRegions2 = taskNumAndPair._2._2.toSeq.sortBy(region => (region.referenceContig, region.start))
-            regionsByTask.add(MutableHashMap(taskNum.toString -> (taskRegions1.length + taskRegions2.length)))
-            val result = function(taskNum, taskLoci, Seq(taskRegions1.iterator, taskRegions2.iterator))
-            result
-          }
-        })
+        val sortedTaskNumberRegionPairs1 = new ShuffledRDD(taskNumberRegionPairs1, new PartitionByKey(numTasks.toInt)).setKeyOrdering(implicitly[Ordering[TaskPosition]])
+        val sortedTaskNumberRegionPairs2 = new ShuffledRDD(taskNumberRegionPairs2, new PartitionByKey(numTasks.toInt)).setKeyOrdering(implicitly[Ordering[TaskPosition]])
+
+        sortedTaskNumberRegionPairs1.zipPartitions(sortedTaskNumberRegionPairs2, preservesPartitioning = true)(
+          (taskNumAndRegionPairs1: Iterator[(TaskPosition, M)], taskNumAndRegionPairs2: Iterator[(TaskPosition, M)]) => {
+            if (taskNumAndRegionPairs1.isEmpty || taskNumAndRegionPairs2.isEmpty) {
+              Iterator.empty
+            } else {
+              val taskNum = taskNumAndRegionPairs1.buffered.head._1.task
+              val taskLoci = lociPartitionsBoxed.value.asInverseMap(taskNum.toLong)
+              //            val taskNumAndPair = taskNumAndRegionPairs.next()
+              //            assert(taskNumAndRegionPairs.isEmpty)
+              //            assert(taskNumAndPair._1 == taskNum)
+              //            val taskRegions1 = taskNumAndPair._2._1.toSeq.sortBy(region => (region.referenceContig, region.start))
+              //            val taskRegions2 = taskNumAndPair._2._2.toSeq.sortBy(region => (region.referenceContig, region.start))
+              //            regionsByTask.add(MutableHashMap(taskNum.toString -> (taskRegions1.length + taskRegions2.length)))
+
+              val result = function(taskNum, taskLoci, Array(taskNumAndRegionPairs1.map(_._2), taskNumAndRegionPairs2.map(_._2)))
+              result
+            }
+          })
       }
 
       // We currently do not support the general case.
