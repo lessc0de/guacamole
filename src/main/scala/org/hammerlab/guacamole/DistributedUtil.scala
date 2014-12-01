@@ -19,7 +19,7 @@
 package org.hammerlab.guacamole
 
 import org.apache.commons.math3
-import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.{ShuffledRDD, RDD}
 import org.apache.spark.{ Partitioner, AccumulatorParam, SparkConf, Logging }
 import org.apache.spark.SparkContext._
 import org.apache.spark.broadcast.Broadcast
@@ -576,20 +576,6 @@ object DistributedUtil extends Logging {
         val partitioned = new ShuffledRDD(taskNumberRegionPairs, new PartitionByKey(numTasks.toInt)).setKeyOrdering(implicitly[Ordering[TaskPosition]])
         partitioned.mapPartitionsWithIndex((taskNum: Int, taskNumAndRegions: Iterator[(TaskPosition, M)]) => {
           val taskLoci = lociPartitionsBoxed.value.asInverseMap(taskNum.toLong)
-          //          val taskRegions = taskNumAndRegions.map(pair => {
-          //            assert(pair._1 == taskNum)
-          //            pair._2
-          //          })
-
-          // We need to invoke the function on an iterator of sorted regions. For now, we just load the regions into memory,
-          // sort them by start position, and use an iterator of this. This of course means we load all the regions into memory,
-          // which obviates the advantages of using iterators everywhere else. A better solution would be to somehow have
-          // the data already sorted on each partition. Note that sorting the whole RDD of regions is unnecessary, so we're
-          // avoiding it -- we just need that the regions on each task are sorted, no need to merge them across tasks.
-          //          val allRegions = taskRegions.toSeq.sortBy(region => (region.referenceContig, region.start))
-
-          //          regionsByTask.add(MutableHashMap(taskNum.toString -> allRegions.length))
-          // val allRegions: Iterator[M] = taskNumAndRegions.map(_._2)
           function(taskNum, taskLoci, Seq(taskNumAndRegions.map(_._2)))
         })
       }
@@ -607,13 +593,6 @@ object DistributedUtil extends Logging {
             } else {
               val taskNum = taskNumAndRegionPairs1.buffered.head._1.task
               val taskLoci = lociPartitionsBoxed.value.asInverseMap(taskNum.toLong)
-              //            val taskNumAndPair = taskNumAndRegionPairs.next()
-              //            assert(taskNumAndRegionPairs.isEmpty)
-              //            assert(taskNumAndPair._1 == taskNum)
-              //            val taskRegions1 = taskNumAndPair._2._1.toSeq.sortBy(region => (region.referenceContig, region.start))
-              //            val taskRegions2 = taskNumAndPair._2._2.toSeq.sortBy(region => (region.referenceContig, region.start))
-              //            regionsByTask.add(MutableHashMap(taskNum.toString -> (taskRegions1.length + taskRegions2.length)))
-
               val result = function(taskNum, taskLoci, Array(taskNumAndRegionPairs1.map(_._2), taskNumAndRegionPairs2.map(_._2)))
               result
             }
