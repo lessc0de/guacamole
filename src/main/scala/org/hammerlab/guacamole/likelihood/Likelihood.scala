@@ -28,6 +28,30 @@ import org.hammerlab.guacamole.variants.{ Allele, Genotype }
  * Functions for calculating the likelihood of a genotype given some read evidence (pileup elements).
  */
 object Likelihood {
+
+  /**
+   * logsumexp trick to compute log of sum of exponentials
+   *
+   * Standard implementation of log( sum( e^{x_i} ) ) can result in sum( e^{x_i} ) = 0
+   * due to underflow.  This offsets each value some constant and adds that constant back in at the end
+   *
+   *   log ( sum( e^{x_i} )  = a + log ( sum( e^{x_i - a} ) )
+   *   // a + log ( sum( e^{x_i - a} ) )
+   *   // =  a + log ( sum( e^{x_i} e^{- a} ) )
+   *   // =  a + log ( e^{- a} * sum( e^{x_i}  ) )
+   *   // =  a + log (e^{-a}) + log (sum( e^{x_i}  ))
+   *
+   *
+   * @param vals values to sum over
+   * @return log of summed exponentials of vals
+   */
+  def logsumexp(vals: Seq[Double]): Double = {
+
+    val shift = vals.min // assumption is vals are negative (log-probabilities)
+    // so take the most negative value shifted values x are 0 < x < |shift|
+    shift + math.log(vals.map(x => math.exp(x - shift)).sum)
+  }
+
   /**
    * A uniform prior on genotypes, i.e. one where all genotypes have equal prior probability.
    *
@@ -107,7 +131,7 @@ object Likelihood {
       i <- 0 until alleles.size
       j <- i until alleles.size
     } yield Genotype(alleles(i), alleles(j))
-    val likelihoods = likelihoodsOfGenotypes(pileup.elements, genotypes, probabilityCorrect, prior, logSpace, normalize)
+    val likelihoods = likelihoodsOfGenotypes(pileup.elements.filter(el => !el.isMidDeletion && !el.isClipped), genotypes, probabilityCorrect, prior, logSpace, normalize)
     genotypes.zip(likelihoods)
   }
 
@@ -168,7 +192,7 @@ object Likelihood {
       (element, elementIndex) <- elements.zipWithIndex
     } {
       val successProbability = probabilityCorrect(element)
-      val probability = if (allele == element.allele) successProbability else 1 - successProbability
+      val probability = if (allele == element.allele) successProbability else (1 - successProbability) / 3
       alleleElementProbabilities.set(alleleIndex, elementIndex, probability)
     }
 
@@ -188,7 +212,7 @@ object Likelihood {
 
     // Normalize and/or convert log probs to plain probabilities.
     val possiblyNormalizedLogLikelihoods = if (normalize) {
-      val logTotalLikelihood = math.log(logLikelihoods.map(math.exp).sum)
+      val logTotalLikelihood = logsumexp(logLikelihoods)
       logLikelihoods.map(_ - logTotalLikelihood)
     } else {
       logLikelihoods

@@ -45,6 +45,18 @@ case class AlleleEvidence(likelihood: Double,
 
   lazy val phredScaledLikelihood = PhredUtils.successProbabilityToPhred(likelihood - 1e-10) //subtract small delta to prevent p = 1
   lazy val variantAlleleFrequency = alleleReadDepth.toFloat / readDepth
+
+  def +(other: AlleleEvidence): AlleleEvidence = {
+    AlleleEvidence(
+      (readDepth * likelihood + other.readDepth * other.likelihood) / (readDepth + other.readDepth),
+      readDepth + other.readDepth,
+      alleleReadDepth + other.alleleReadDepth,
+      forwardDepth + other.forwardDepth,
+      alleleForwardDepth + other.alleleForwardDepth,
+      (readDepth * averageMappingQuality + other.readDepth * other.averageMappingQuality) / (readDepth + other.readDepth),
+      (readDepth * averageBaseQuality + other.readDepth * other.averageBaseQuality) / (readDepth + other.readDepth)
+    )
+  }
 }
 
 class AlleleEvidenceSerializer extends Serializer[AlleleEvidence] {

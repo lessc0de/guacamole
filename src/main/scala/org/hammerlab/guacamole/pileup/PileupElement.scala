@@ -140,6 +140,7 @@ case class PileupElement(
   lazy val isInsertion = alignment match { case Insertion(_, _) => true; case _ => false }
   lazy val isDeletion = alignment match { case Deletion(_, _) => true; case _ => false }
   lazy val isMidDeletion = alignment match { case MidDeletion => true; case _ => false }
+  lazy val isClipped = alignment match { case Clipped => true; case _ => false }
   lazy val isMismatch = alignment match { case Mismatch(_, _, _) => true; case _ => false }
   lazy val isMatch = alignment match { case Match(_, _) => true; case _ => false }
 

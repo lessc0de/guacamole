@@ -29,10 +29,13 @@ import org.hammerlab.guacamole.variants.{ Allele, Genotype }
  *
  * @param locus The locus on the reference genome
  * @param referenceBase The reference base at [[locus]] on the reference genome
- * @param elements Sequence of [[PileupElement]] instances giving the sequenced bases that align to a particular
+ * @param allElements Sequence of [[PileupElement]] instances giving the sequenced bases that align to a particular
  *                 reference locus, in arbitrary order.
  */
-case class Pileup(locus: Long, referenceBase: Byte, elements: Seq[PileupElement]) {
+case class Pileup(locus: Long, referenceBase: Byte, allElements: Seq[PileupElement]) {
+
+  val elements = allElements.filter(!_.isMidDeletion)
+
   /** The first element in the pileup. */
   lazy val head = {
     assume(elements.nonEmpty, "Empty pileup")
@@ -46,7 +49,7 @@ case class Pileup(locus: Long, referenceBase: Byte, elements: Seq[PileupElement]
     "Reads in pileup have mismatching reference names")
   assume(elements.forall(_.locus == locus), "Reads in pileup have mismatching loci")
 
-  lazy val distinctAlleles: Seq[Allele] = elements.map(_.allele).distinct.sorted.toIndexedSeq
+  lazy val distinctAlleles: Seq[Allele] = elements.filter(el => !el.isMidDeletion && !el.isClipped).map(_.allele).distinct.sorted.toIndexedSeq
 
   lazy val sampleName = elements.head.read.sampleName
 

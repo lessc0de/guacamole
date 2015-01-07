@@ -20,6 +20,7 @@ package org.hammerlab.guacamole.commands
 
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
+import org.bdgenomics.adam.util.PhredUtils
 import org.hammerlab.guacamole.Common.Arguments.SomaticCallerArgs
 import org.hammerlab.guacamole.{ SparkCommand, DelayedMessages, Common, DistributedUtil }
 import org.hammerlab.guacamole.likelihood.Likelihood
@@ -28,7 +29,7 @@ import org.hammerlab.guacamole.filters.SomaticGenotypeFilter.SomaticGenotypeFilt
 import org.hammerlab.guacamole.filters.{ PileupFilter, SomaticAlternateReadDepthFilter, SomaticGenotypeFilter, SomaticReadDepthFilter }
 import org.hammerlab.guacamole.pileup.Pileup
 import org.hammerlab.guacamole.reads.Read
-import org.hammerlab.guacamole.variants.{ AlleleConversions, AlleleEvidence, CalledSomaticAllele }
+import org.hammerlab.guacamole.variants._
 import org.hammerlab.guacamole.windowing.SlidingWindow
 import org.kohsuke.args4j.{ Option => Opt }
 
@@ -86,8 +87,8 @@ object SomaticStandard {
         normalReads.mappedReads
       )
 
-      var potentialGenotypes: RDD[CalledSomaticAllele] =
-        DistributedUtil.pileupFlatMapTwoRDDs[CalledSomaticAllele](
+      var potentialGenotypes: RDD[ReferenceVariant] =
+        DistributedUtil.pileupFlatMapTwoRDDs[ReferenceVariant](
           tumorReads.mappedReads,
           normalReads.mappedReads,
           lociPartitions,
@@ -105,27 +106,12 @@ object SomaticStandard {
             ).iterator
         )
 
-      // Filter potential genotypes to min read values
-      potentialGenotypes =
-        SomaticReadDepthFilter(
-          potentialGenotypes,
-          args.minTumorReadDepth,
-          args.maxTumorReadDepth,
-          args.minNormalReadDepth
-        )
-
-      potentialGenotypes =
-        SomaticAlternateReadDepthFilter(
-          potentialGenotypes,
-          args.minTumorAlternateReadDepth
-        )
-
       potentialGenotypes.persist()
       Common.progress("Computed %,d potential genotypes".format(potentialGenotypes.count))
 
       val genotypeLociPartitions = DistributedUtil.partitionLociUniformly(args.parallelism, loci)
       val genotypes: RDD[CalledSomaticAllele] =
-        DistributedUtil.windowFlatMapWithState[CalledSomaticAllele, CalledSomaticAllele, Option[String]](
+        DistributedUtil.windowFlatMapWithState[ReferenceVariant, CalledSomaticAllele, Option[String]](
           Seq(potentialGenotypes),
           genotypeLociPartitions,
           skipEmpty = true,
@@ -155,18 +141,49 @@ object SomaticStandard {
      * @return Set of genotypes if there are no others in the window
      */
     def removeCorrelatedGenotypes(state: Option[String],
-                                  genotypeWindows: Seq[SlidingWindow[CalledSomaticAllele]]): (Option[String], Iterator[CalledSomaticAllele]) = {
+                                  genotypeWindows: Seq[SlidingWindow[ReferenceVariant]]): (Option[String], Iterator[CalledSomaticAllele]) = {
       val genotypeWindow = genotypeWindows(0)
       val locus = genotypeWindow.currentLocus
       val currentGenotypes = genotypeWindow.currentRegions.filter(_.overlapsLocus(locus))
 
       assert(currentGenotypes.length <= 1, "There cannot be more than one called genotype at the given locus")
 
+      def somaticOnly(variant: ReferenceVariant): Option[CalledSomaticAllele] = {
+        variant match {
+          case g: CalledSomaticAllele => Some(g)
+          case _                      => None
+        }
+      }
+
       if (currentGenotypes.size == genotypeWindow.currentRegions().size) {
-        (None, currentGenotypes.iterator)
+        (None, currentGenotypes.flatMap({
+          case g: CalledSomaticAllele => Some(g)
+          case _                      => None
+        }).iterator)
+
       } else {
         (None, Iterator.empty)
       }
+    }
+
+    def findPotentialSomaticVariantAtLocus(tumorPileup: Pileup,
+                                           normalPileup: Pileup,
+                                           oddsThreshold: Int,
+                                           maxMappingComplexity: Int = 100,
+                                           minAlignmentForComplexity: Int = 1,
+                                           minAlignmentQuality: Int = 1,
+                                           filterMultiAllelic: Boolean = false,
+                                           maxReadDepth: Int = Int.MaxValue): Seq[CalledSomaticAllele] = {
+      findPotentialVariantAtLocus(
+        tumorPileup,
+        normalPileup,
+        oddsThreshold,
+        maxMappingComplexity,
+        minAlignmentForComplexity,
+        minAlignmentQuality,
+        filterMultiAllelic,
+        maxReadDepth
+      ).map({ case g: CalledSomaticAllele => g })
     }
 
     def findPotentialVariantAtLocus(tumorPileup: Pileup,
@@ -176,7 +193,7 @@ object SomaticStandard {
                                     minAlignmentForComplexity: Int = 1,
                                     minAlignmentQuality: Int = 1,
                                     filterMultiAllelic: Boolean = false,
-                                    maxReadDepth: Int = Int.MaxValue): Seq[CalledSomaticAllele] = {
+                                    maxReadDepth: Int = Int.MaxValue): Seq[ReferenceVariant] = {
 
       val filteredNormalPileup = PileupFilter(
         normalPileup,
@@ -214,7 +231,7 @@ object SomaticStandard {
       val (mostLikelyTumorGenotype, mostLikelyTumorGenotypeLikelihood) =
         Likelihood.likelihoodsOfAllPossibleGenotypesFromPileup(
           filteredTumorPileup,
-          Likelihood.probabilityCorrectIncludingAlignment,
+          Likelihood.probabilityCorrectIgnoringAlignment,
           normalize = true
         ).maxBy(_._2)
 
@@ -231,9 +248,12 @@ object SomaticStandard {
       // TODO(ryan): in the future, we may want to pay closer attention to the likelihood of the most likely tumor
       // genotype in the normal sample.
       lazy val normalVariantsTotalLikelihood = normalVariantGenotypes.map(_._2).sum
+      lazy val phredNormalReference = PhredUtils.successProbabilityToPhred(1 - 1e-10 - normalVariantsTotalLikelihood)
       lazy val somaticOdds = mostLikelyTumorGenotypeLikelihood / normalVariantsTotalLikelihood
 
-      if (mostLikelyTumorGenotype.hasVariantAllele && somaticOdds * 100 >= oddsThreshold) {
+      //FIXME make falseDiscoveryRate a real option
+      val falseDiscoveryRate = oddsThreshold
+      if (mostLikelyTumorGenotype.hasVariantAllele && phredNormalReference > falseDiscoveryRate) {
         for {
           // NOTE(ryan): currently only look at the first non-ref allele in the most likely tumor genotype.
           // removeCorrelatedGenotypes depends on there only being one variant per locus.
@@ -253,10 +273,23 @@ object SomaticStandard {
             normalEvidence
           )
         }
+      } else if (mostLikelyTumorGenotype.hasVariantAllele) {
+        for {
+          allele <- mostLikelyTumorGenotype.getNonReferenceAlleles.headOption.toSeq
+          tumorEvidence = AlleleEvidence(mostLikelyTumorGenotypeLikelihood, allele, filteredTumorPileup)
+          normalEvidence = AlleleEvidence(normalVariantsTotalLikelihood, allele, filteredNormalPileup)
+        } yield {
+          CalledAllele(
+            tumorPileup.sampleName,
+            tumorPileup.referenceName,
+            tumorPileup.locus,
+            allele,
+            tumorEvidence + normalEvidence
+          )
+        }
       } else {
-        Seq()
+        Seq.empty
       }
-
     }
   }
 }
