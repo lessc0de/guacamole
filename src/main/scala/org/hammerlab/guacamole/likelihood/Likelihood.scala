@@ -70,6 +70,7 @@ object Likelihood {
   def likelihoodOfGenotype(
     elements: Seq[PileupElement],
     genotype: Genotype,
+    alternateAlleleFrequency: Double = 0.5,
     probabilityCorrect: PileupElement => Double = probabilityCorrectIgnoringAlignment,
     prior: Genotype => Double = uniformPrior,
     logSpace: Boolean = false): Double = {
@@ -77,6 +78,7 @@ object Likelihood {
     val result = likelihoodsOfGenotypes(
       elements,
       Seq(genotype),
+      alternateAlleleFrequency,
       probabilityCorrect,
       prior,
       logSpace,
@@ -147,6 +149,7 @@ object Likelihood {
    */
   def likelihoodsOfGenotypes(elements: Seq[PileupElement],
                              genotypes: Seq[Genotype],
+                             alternateAlleleFrequency: Double = 0.5,
                              probabilityCorrect: PileupElement => Double = probabilityCorrectIgnoringAlignment,
                              prior: Genotype => Double = uniformPrior,
                              logSpace: Boolean = false,
@@ -182,8 +185,7 @@ object Likelihood {
       val alleleRow1 = alleleElementProbabilities.viewRow(alleleToIndex(genotype.alleles(0)))
       val alleleRow2 = alleleElementProbabilities.viewRow(alleleToIndex(genotype.alleles(1)))
       (alleleRow1.aggregate(alleleRow2, Functions.plus, Functions.chain(Functions.log, Functions.plus))
-        + math.log(prior(genotype))
-        - math.log(2) * depth)
+        + math.log(prior(genotype)))
     })
 
     // Normalize and/or convert log probs to plain probabilities.
