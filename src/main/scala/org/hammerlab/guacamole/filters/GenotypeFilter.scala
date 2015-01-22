@@ -21,7 +21,7 @@ package org.hammerlab.guacamole.filters
 import org.apache.spark.rdd.RDD
 import org.hammerlab.guacamole.Common
 import org.hammerlab.guacamole.Common.Arguments.Base
-import org.hammerlab.guacamole.variants.{ CalledAllele, AlleleEvidence }
+import org.hammerlab.guacamole.variants.{ CalledSomaticAllele, CalledAllele, AlleleEvidence }
 import org.kohsuke.args4j.Option
 
 /**
@@ -111,6 +111,53 @@ object MinimumAlternateReadDepthFilter {
   }
 }
 
+object AverageMappingQualityFilter {
+
+  def hasMinimumAverageMappingQuality(genotype: CalledAllele,
+                                      minAverageMappingQuality: Int): Boolean = {
+
+    genotype.evidence.averageMappingQuality > minAverageMappingQuality
+  }
+
+  /**
+   *
+   * @param genotypes RDD of genotypes to filter
+   * @param minAverageMappingQuality
+   * @param debug if true, compute the count of genotypes after filtering
+   * @return  Genotypes with variant allele frequency >= minVAF
+   */
+  def apply(genotypes: RDD[CalledAllele],
+            minAverageMappingQuality: Int,
+            debug: Boolean = false): RDD[CalledAllele] = {
+    val filteredGenotypes = genotypes.filter(hasMinimumAverageMappingQuality(_, minAverageMappingQuality))
+    if (debug) GenotypeFilter.printFilterProgress(filteredGenotypes)
+    filteredGenotypes
+  }
+}
+
+object AverageBaseQualityFilter {
+
+  def hasMinimumAverageBaseQuality(genotype: CalledAllele,
+                                   minAverageBaseQuality: Int): Boolean = {
+    genotype.evidence.averageBaseQuality > minAverageBaseQuality
+  }
+
+  /**
+   *
+   * @param genotypes RDD of genotypes to filter
+   * @param minAverageBaseQuality
+   * @param debug if true, compute the count of genotypes after filtering
+   * @return  Genotypes with variant allele frequency >= minVAF
+   */
+  def apply(genotypes: RDD[CalledAllele],
+            minAverageBaseQuality: Int,
+            debug: Boolean = false): RDD[CalledAllele] = {
+    val filteredGenotypes = genotypes.filter(hasMinimumAverageBaseQuality(_, minAverageBaseQuality))
+    if (debug) GenotypeFilter.printFilterProgress(filteredGenotypes)
+    filteredGenotypes
+  }
+}
+
 object GenotypeFilter {
 
   def printFilterProgress(filteredGenotypes: RDD[CalledAllele]) = {
@@ -135,6 +182,12 @@ object GenotypeFilter {
     @Option(name = "--min-likelihood", usage = "Minimum Phred-scaled likelihood. Default: 0 (off)")
     var minLikelihood: Int = 0
 
+    @Option(name = "--min-average-mapping-quality", metaVar = "X", usage = "Make a call average mapping quality of reads is greater than this value")
+    var minAverageMappingQuality: Int = 0
+
+    @Option(name = "--min-average-base-quality", metaVar = "X", usage = "Make a call average base quality of bases in the pileup is greater than this value")
+    var minAverageBaseQuality: Int = 0
+
   }
 
   def apply(genotypes: RDD[CalledAllele], args: GenotypeFilterArguments): RDD[CalledAllele] = {
@@ -150,6 +203,10 @@ object GenotypeFilter {
       filteredGenotypes = MinimumLikelihoodFilter(filteredGenotypes, args.minLikelihood, args.debugGenotypeFilters)
     }
 
+    filteredGenotypes = AverageMappingQualityFilter(filteredGenotypes, args.minAverageMappingQuality, args.debugGenotypeFilters)
+
+    filteredGenotypes = AverageBaseQualityFilter(filteredGenotypes, args.minAverageBaseQuality, args.debugGenotypeFilters)
+
     filteredGenotypes
   }
 
@@ -162,6 +219,10 @@ object GenotypeFilter {
 
     if (minReadDepth > 0) {
       filteredGenotypes = filteredGenotypes.filter(gt => ReadDepthFilter.withinReadDepthRange(gt.evidence, minReadDepth, maxReadDepth))
+    }
+
+    if (minAlternateReadDepth > 0) {
+      filteredGenotypes = filteredGenotypes.filter(gt => MinimumAlternateReadDepthFilter.hasMinimumAlternateReadDepth(gt.evidence, minAlternateReadDepth))
     }
 
     if (minAlternateReadDepth > 0) {
