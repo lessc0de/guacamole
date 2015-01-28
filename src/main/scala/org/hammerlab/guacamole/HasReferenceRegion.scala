@@ -53,7 +53,7 @@ trait HasReferenceRegion {
   }
 
   def overlaps(other: HasReferenceRegion): Boolean = {
-    (start > other.start && start < other.end) || (other.start > start && other.start < end)
+    (start >= other.start && start < other.end) || (other.start >= start && other.start < end)
   }
 }
 
