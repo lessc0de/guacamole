@@ -72,7 +72,7 @@ object GermlineSV {
       genotypes.persist(StorageLevel.MEMORY_ONLY_SER)
       val minReadDepth = args.minReadDepth
       val minAltReadDepth = args.minAlternateReadDepth
-      val filteredGenotypes = genotypes.filter(g => g.support < minReadDepth || g.altSupport < minAltReadDepth)
+      val filteredGenotypes = genotypes.filter(g => g.support > minReadDepth || g.altSupport > minAltReadDepth)
       Common.progress("Computed %,d structural variants".format(genotypes.count))
       filteredGenotypes.map(_.toString).saveAsTextFile(args.variantOutput)
 
