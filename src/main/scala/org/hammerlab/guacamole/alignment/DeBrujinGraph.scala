@@ -7,7 +7,7 @@ class DeBrujinGraph(val kmerCounts: mutable.Map[Kmer, Int], kmerSize: Int) {
 
   type Path = List[Kmer]
 
-  def depthFirstSearch(seed: Kmer,
+  def allPaths(seed: Kmer,
                        minPathLength: Int = 100,
                        maxPathLength: Int = 1000,
                        maxPaths: Int = 10): List[Path] = {
@@ -34,7 +34,7 @@ class DeBrujinGraph(val kmerCounts: mutable.Map[Kmer, Int], kmerSize: Int) {
   }
 
   def children(node: Kmer): Seq[Kmer] = {
-    node.possibleNext(kmerSize).filter(kmerCounts.contains).toSeq
+    node.possibleNext.filter(kmerCounts.contains).toSeq
   }
 
 }
@@ -44,10 +44,15 @@ object DeBrujinGraph {
   def apply(sequences: Seq[Sequence], kmerSize: Int): DeBrujinGraph = {
     val kmerCounts: mutable.Map[Kmer, Int] = mutable.Map.empty[Kmer, Int]
 
-    sequences.filter(Bases.allStandardBases(_)).foreach(Kmer(_, kmerSize).foreach(k => {
-      val count = kmerCounts.getOrElse(k, 0)
-      kmerCounts.update(k, count + 1)
-    }))
+    sequences.filter(Bases.allStandardBases(_))
+      .foreach(
+        _.sliding(kmerSize)
+          .foreach(seq => {
+          val kmer = Kmer(seq)
+          val count = kmerCounts.getOrElse(kmer, 0)
+          kmerCounts.update(kmer, count + 1)
+        })
+      )
 
     new DeBrujinGraph(kmerCounts, kmerSize)
   }

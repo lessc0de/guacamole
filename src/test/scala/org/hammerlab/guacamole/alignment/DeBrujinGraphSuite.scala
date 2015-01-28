@@ -45,14 +45,14 @@ class DeBrujinGraphSuite extends SparkFunSuite {
 
     val sequence = "TCATCTTAAAAGACATAAA"
     val graph = DeBrujinGraph(Seq(sequence), kmerSize = 6)
-    val paths = graph.depthFirstSearch(Kmer("TCATCT"), minPathLength = 10)
+    val paths = graph.allPaths(Kmer("TCATCT"), minPathLength = 10)
 
     assert(paths.length === 1)
   }
 
   sparkTest("simple read assembly") {
     val graph = DeBrujinGraph(smallWindowSequences, kmerSize = 20)
-    val paths = graph.depthFirstSearch(
+    val paths = graph.allPaths(
       Kmer("TAACCCTAACCCTAACCCTA"),
       minPathLength = 85,
       maxPathLength = 125
